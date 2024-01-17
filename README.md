@@ -2,7 +2,7 @@
 
 Этот репозиторий предназначен для выполнения проекта по оптимизации NLP алгоритма под RISC-V CPU.
 
-### Задания (TBD)
+### Задания
 
 Ожидается командная работа над проектом. Если нет дополнительных пояснений к заданию, считается что оно выполняется каждым участником команды.
 
@@ -48,13 +48,13 @@ Please note that this repo started recently as a fun weekend project: I took my 
 First, navigate to the folder where you keep your projects and clone this repository to this folder:
 
 ```bash
-git clone https://github.com/karpathy/llama2.c.git
+git clone https://github.com/dkurt/llama2.c.riscv
 ```
 
 Then, open the repository folder:
 
 ```bash
-cd llama2.c
+cd llama2.c.riscv
 ```
 
 Now, let's just run a baby Llama 2 model in C. You need a model checkpoint. Download this 15M parameter model I trained on the [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) dataset (~60MB download):
