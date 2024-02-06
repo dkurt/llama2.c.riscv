@@ -158,6 +158,13 @@ Suddenly, she heard a noise. It was coming from the corner of the room. She slow
 The little girl was still scared, but she was also curious. She";
 
     test_generate ("It was dark and cold around.", "/tmp/stories110M.bin", 0.3f, 103, 0.6f, expected2);
+
+    const char* expected3 = "There was a boy, who was three years old. He loved to play in the park. One day, he saw a fountain in the park and he wanted to play in it. He was very excited and he started running towards the fountain. But when he got close, he slipped and fell into the fountain. He was so embarrassed.\n\
+The boy started crying and he felt very sad. He wanted to get out of the fountain, but he couldn't. He started to cry even louder.\n\
+Suddenly, a kind old man came to the fountain and he helped the boy out of the fountain. He was very kind and he gave the boy a hug. The boy was very happy and he thanked the old man.\n\
+The boy was very embarrassed, but he was also very happy. He learned that it was important to be careful when playing in";
+    test_generate("There was a boy, who", "stories110M.bin", 0.7f, 200, 0.9f, expected3);
+
     printf("ALL OK\n");
 
 }
