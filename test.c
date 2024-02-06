@@ -165,12 +165,21 @@ Suddenly, a kind old man came to the fountain and he helped the boy out of the f
 The boy was very embarrassed, but he was also very happy. He learned that it was important to be careful when playing in";
     test_generate("There was a boy, who", "stories110M.bin", 0.7f, 200, 0.9f, expected3);
 
-    const char* expected4 = "While you sleep, i`m destroying this world. She was so angry and frustrated that she couldn't stop. She was so angry that she started to cry.\n\
+      const char* expected4 = "While you sleep, i`m destroying this world. She was so angry and frustrated that she couldn't stop. She was so angry that she started to cry.\n\
 Suddenly, she heard a voice. It was coming from outside her window. It was a little bird.\n\
 \"Why are you so angry,Anyie?\" asked the bird.\n\
 \"I want to destroy this world,\" saidAnyie.\n\
 The bird smiled. \"You can't";
     test_generate("While you sleep, i`m destroying this world.", "stories110M.bin", 0.2f, 100, 0.9f, expected4);
+
+    const char* expected5 = "It was cold and it rained. The sky was grey and the trees were wet.\n\
+Mommy and Daddy were busy in the kitchen. They were getting ready to make dinner. They put on their coats and hats.\n\
+Then they heard a loud noise outside. It was thunder! It was so loud that it made them jump.\n\
+Mommy and Daddy opened the window and saw a big, dark cloud. They were scared, so they decided to stay inside.\n\
+Mommy and Daddy started to make dinner. They put some food on the table and started to eat. But then the thunder came again. It was so loud that it made the lights go out.\n\
+Mommy and Daddy were scared and tried to hide. But it was too late. The thunder was too loud and it made the lights go out.\n\
+The thunder was so strong that it made a big storm. It was so bad";
+    test_generate("It was cold and it rained.", "stories110M.bin", 0.75f, 200, 0.8f, expected5);
 
     printf("ALL OK\n");
 
