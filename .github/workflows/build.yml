@@ -44,4 +44,5 @@ jobs:
       - name: Run tests
         run: |
           chmod +x ./testc
+          cp /tmp/stories* .
           ./testc
