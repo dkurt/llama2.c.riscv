@@ -228,7 +228,7 @@ void softmax(float* x, int size) {
 //     // W (d,n) @ x (n,) -> xout (d,)
 //     // by far the most amount of time is spent inside this little function
 //     int i;
-//     //#pragma omp parallel for private(i)
+//     #pragma omp parallel for private(i) num_threads(4)
 //     for (i = 0; i < d; i++) {
 //         float val = 0.0f;
 //         for (int j = 0; j < n; j++) {
@@ -246,7 +246,7 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
     // by far the most amount of time is spent inside this little function
     int i;
 
-    //#pragma omp parallel for private(i)
+    #pragma omp parallel for private(i) num_threads(3)
     for (i = 0; i < d; i++) {
         float* x1 = x;
         float* w1 = &w[i*n];
@@ -337,7 +337,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 
         // multihead attention. iterate over all heads
         int h;
-        //#pragma omp parallel for private(h)
+        #pragma omp parallel for private(h) num_threads(3)
         for (h = 0; h < p->n_heads; h++) {
             // get the query vector for this head
             float* q = s->q + h * head_size;
