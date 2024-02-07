@@ -93,6 +93,10 @@ int test_rvv()
 
 
 void test_generate(char* prompt, char* checkpoint_path, float temperature, int steps, float topp, const char* expected){
+
+    long total_time_start = time_in_ms();
+
+
     char *tokenizer_path = "tokenizer.bin";
     unsigned long long rng_seed = 124; // seed rng with time by default
 
@@ -140,6 +144,10 @@ void test_generate(char* prompt, char* checkpoint_path, float temperature, int s
         printf("Expected: %s\n\nGenerated: %s\n", expected, output);
     }
     assert_eq(res, 0);
+
+    long total_time_end = time_in_ms();
+    fprintf(stderr, "Total time: %f\n", (double)(total_time_end-total_time_start));
+
 }
 
 int main(int argc, char *argv[]) {
