@@ -16,10 +16,10 @@
 #include <riscv_vector.h>
 #include <omp.h>
 
-#ifndef TESTING
-extern double matmul_time;
+#if defined TESTING
+    extern double matmul_time;
 #else
-double matmul_time = 0;
+    double matmul_time = 0;
 #endif
 
 // ----------------------------------------------------------------------------
