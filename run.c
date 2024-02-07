@@ -1,5 +1,6 @@
 /* Inference for Llama-2 Transformer model in pure C */
 
+#include <riscv_vector.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -15,6 +16,13 @@
 #endif
 // ----------------------------------------------------------------------------
 // Transformer model
+
+float* tmp3;
+double rms_sum_time = 0;
+int rms_counter = 0;
+long matmul_time_sum = 0;
+int matmul_counter = 0;
+long time_in_ms();
 
 typedef struct {
     int dim; // transformer dimension
@@ -214,6 +222,7 @@ void softmax(float* x, int size) {
     }
 }
 
+/*
 void matmul(float* xout, float* x, float* w, int n, int d) {
     // W (d,n) @ x (n,) -> xout (d,)
     // by far the most amount of time is spent inside this little function
@@ -227,39 +236,94 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
         xout[i] = val;
     }
 }
+*/
+
+
+void matmul(float* xout, float* x, float* w, int n, int d) {
+    // W (d,n) @ x (n,) -> xout (d,)
+    // by far the most amount of time is spent inside this little function
+
+    vfloat32m4_t xv, wiv, mulv, FMAv;
+    size_t n1;
+    float *w1, *x1;
+    int vlm4 = vsetvlmax_e32m4();
+
+    for (int i = 0; i < d; i++){
+        int vl = 0;
+        n1 = n;
+        w1 = w + i*n;
+        x1 = x;
+        //vfloat32m4_t addv = vfmv_v_f_f32m4(0.0f,vlm4);
+        FMAv = vfmv_v_f_f32m4(0.0f, vlm4);
+
+        for (; n1 > vl; n1 -= vl){
+            vl = vsetvl_e32m4(n1);
+            xv = vle32_v_f32m4(x1, vl);
+            wiv = vle32_v_f32m4(w1, vl);
+            FMAv = vfmacc_vv_f32m4 (FMAv, xv, wiv, vl);
+            
+            w1 += vl;
+            x1 += vl;
+
+        }
+        vl = vsetvlmax_e32m1();
+        vfloat32m1_t resv = vfmv_v_f_f32m1(0.0f, vl);
+        resv = vfredosum_vs_f32m4_f32m1 (resv, FMAv, resv, vlm4);
+        vl = vsetvl_e32m4(n1);
+        xv = vle32_v_f32m4(x1, vl);
+        wiv = vle32_v_f32m4(w1, vl);
+        mulv = vfmul_vv_f32m4 (xv, wiv, vl);
+        resv = vfredosum_vs_f32m4_f32m1(resv, mulv, resv, vl);
+
+        vse32_v_f32m1(xout + i, resv, 1); 
+    }
+}
+
 
 float* forward(Transformer* transformer, int token, int pos) {
-
     // a few convenience variables
     Config* p = &transformer->config;
     TransformerWeights* w = &transformer->weights;
     RunState* s = &transformer->state;
     float *x = s->x;
     int dim = p->dim;
+    //fprintf(stderr, "%d", dim);
     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
     int kv_mul = p->n_heads / p->n_kv_heads; // integer multiplier of the kv sharing in multiquery
     int hidden_dim =  p->hidden_dim;
     int head_size = dim / p->n_heads;
+    //tmp3 = (float*)malloc(d);
 
     // copy the token embedding into x
     float* content_row = w->token_embedding_table + token * dim;
     memcpy(x, content_row, dim*sizeof(*x));
-
+    
     // forward all the layers
     for(unsigned long long l = 0; l < p->n_layers; l++) {
 
+        long rms_time_start = time_in_ms();
+
         // attention rmsnorm
         rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
+
+        long rms_time_end = time_in_ms();
+        rms_sum_time += rms_time_end - rms_time_start;
+        rms_counter++;
 
         // key and value point to the kv cache
         int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
         s->k = s->key_cache + loff + pos * kv_dim;
         s->v = s->value_cache + loff + pos * kv_dim;
 
+        long matmul_time_start = time_in_ms();
+
         // qkv matmuls for this position
         matmul(s->q, s->xb, w->wq + l*dim*dim, dim, dim);
         matmul(s->k, s->xb, w->wk + l*dim*kv_dim, dim, kv_dim);
         matmul(s->v, s->xb, w->wv + l*dim*kv_dim, dim, kv_dim);
+
+        long matmul_time_end = time_in_ms();
+        matmul_time_sum += matmul_time_end - matmul_time_start;
 
         // RoPE relative positional encoding: complex-valued rotate q and k in each head
         for (int i = 0; i < dim; i+=2) {
@@ -318,8 +382,14 @@ float* forward(Transformer* transformer, int token, int pos) {
             }
         }
 
+        matmul_time_start = time_in_ms();
+
+
         // final matmul to get the output of the attention
         matmul(s->xb2, s->xb, w->wo + l*dim*dim, dim, dim);
+
+        matmul_time_end = time_in_ms();
+        matmul_time_sum += matmul_time_end - matmul_time_start;
 
         // residual connection back into x
         for (int i = 0; i < dim; i++) {
@@ -331,8 +401,14 @@ float* forward(Transformer* transformer, int token, int pos) {
 
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
+
+        matmul_time_start = time_in_ms();
+
         matmul(s->hb, s->xb, w->w1 + l*dim*hidden_dim, dim, hidden_dim);
         matmul(s->hb2, s->xb, w->w3 + l*dim*hidden_dim, dim, hidden_dim);
+
+        matmul_time_end = time_in_ms();
+        matmul_time_sum += matmul_time_end - matmul_time_start;
 
         // SwiGLU non-linearity
         for (int i = 0; i < hidden_dim; i++) {
@@ -344,13 +420,23 @@ float* forward(Transformer* transformer, int token, int pos) {
             s->hb[i] = val;
         }
 
+        matmul_time_start = time_in_ms();
+
         // final matmul to get the output of the ffn
         matmul(s->xb, s->hb, w->w2 + l*dim*hidden_dim, hidden_dim, dim);
+
+        matmul_time_end = time_in_ms();
+        matmul_time_sum += matmul_time_end - matmul_time_start;
 
         // residual connection
         for (int i = 0; i < dim; i++) {
             x[i] += s->xb[i];
         }
+
+        matmul_counter += 7;
+
+        //fprintf(stderr, "Average matmul time: %f", matmul_time_sum / 7);
+        //fprintf(stderr, "Forward loop is ended %d____%d\n", l, p->n_layers );
     }
 
     // final rmsnorm
@@ -358,6 +444,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 
     // classifier into logits
     matmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
+    //fprintf(stderr, "Forward is ended. %d\n", pos);
     return s->logits;
 }
 
@@ -727,6 +814,11 @@ long time_in_ms() {
 // generation loop
 
 void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
+
+    Config* pTMP = &transformer->config;
+    int dimTMP = pTMP->dim;
+    tmp3 = (float*)malloc(dimTMP);
+
     char *empty_prompt = "";
     if (prompt == NULL) { prompt = empty_prompt; }
 
@@ -744,10 +836,28 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
     int next;        // will store the next token in the sequence
     int token = prompt_tokens[0]; // kick off with the first token in the prompt
     int pos = 0;     // position in the sequence
+    
+    int forward_counter = 0;
+    long forward_sum = 0;
+
+    int sample_counter = 0;
+    long sample_sum = 0;
+
+    int decode_counter = 0;
+    long decode_sum = 0;
+
     while (pos < steps) {
+
+        long forward_time_start = time_in_ms();
 
         // forward the transformer to get logits for the next token
         float* logits = forward(transformer, token, pos);
+
+        long forward_time_end = time_in_ms();
+        forward_counter++;
+        forward_sum += forward_time_end - forward_time_start;
+
+        long sample_time_start = time_in_ms();
 
         // advance the state machine
         if (pos < num_prompt_tokens - 1) {
@@ -759,27 +869,48 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
         }
         pos++;
 
+        long sample_time_end = time_in_ms();
+        sample_counter++;
+
+
         // data-dependent terminating condition: the BOS (=1) token delimits sequences
         if (next == 1) { break; }
 
+        long decode_time_start = time_in_ms();
+
         // print the token as string, decode it with the Tokenizer object
         char* piece = decode(tokenizer, token, next);
+
+        long decode_time_end = time_in_ms();
+        decode_counter++;
+
         safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
         fflush(stdout);
         token = next;
 
         // init the timer here because the first iteration can be slower
         if (start == 0) { start = time_in_ms(); }
+        //fprintf(stderr, " Iteration: %d___%d\n", pos, steps);
     }
     printf("\n");
+
+
 
     // report achieved tok/s (pos-1 because the timer starts after first iteration)
     if (pos > 1) {
         long end = time_in_ms();
         fprintf(stderr, "achieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
+        fprintf(stderr, "generate time (ms): %f\n\n", (double)((end-start)));
+        fprintf(stderr, "forward average time (ms): %f\n", (double)forward_sum / (double)forward_counter);
+        fprintf(stderr, "forward total time (ms): %f\n", (double)forward_sum);
+        fprintf(stderr, "matmul average time: %f\n", (double)matmul_time_sum / (double)matmul_counter);
+        fprintf(stderr, "matmul total time: %f\n", (double)matmul_time_sum);
+        fprintf(stderr, "matmul time / forward time: %f percents \n", (double)matmul_time_sum / (double)forward_sum * 100);
     }
 
     free(prompt_tokens);
+
+    free(tmp3);
 }
 
 void read_stdin(const char* guide, char* buffer, size_t bufsize) {
