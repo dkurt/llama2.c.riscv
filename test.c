@@ -169,7 +169,6 @@ Suddenly, she heard a noise. It was coming from the corner of the room. She slow
 The little girl was still scared, but she was also curious. She";
 
     test_generate ("It was dark and cold around.", "stories110M.bin", 0.3f, 103, 0.6f, expected2);
-<<<<<<< HEAD
 
     const char* expected3 = "There was a boy, who was three years old. He loved to play in the park. One day, he saw a fountain in the park and he wanted to play in it. He was very excited and he started running towards the fountain. But when he got close, he slipped and fell into the fountain. He was so embarrassed. \n\
 The boy started crying and he felt very sad. He wanted to get out of the fountain, but he couldn't. He started to cry even louder. \n\
@@ -193,8 +192,6 @@ Mommy and Daddy were scared and tried to hide. But it was too late. The thunder 
 The thunder was so strong that it made a big storm. It was so bad";
     test_generate("It was cold and it rained.", "stories110M.bin", 0.75f, 200, 0.8f, expected5);
 
-=======
->>>>>>> 095fd26 (new)
     printf("ALL OK\n");
 
 }

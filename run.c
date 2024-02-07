@@ -335,8 +335,59 @@ float* forward(Transformer* transformer, int token, int pos) {
             float* att = s->att + h * p->seq_len;
             // iterate over all timesteps, including the current one
             for (int t = 0; t <= pos; t++) {
-                // get the key vector for this head and at this timestep
+                // // get the key vector for this head and at this timestep
+                // float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+                // // calculate the attention score as the dot product of q and k
+                // float score = 0.0f;
+                // for (int i = 0; i < head_size; i++) {
+                //     score += q[i] * k[i];
+                // }
+                // score /= sqrtf(head_size);
+                // // save the score to the attention buffer
+                // att[t] = score;
+
                 float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+                float score = 0.0f;
+                float* q_v=q; 
+                float*k_v=k;
+                float scalar=1/sqrtf(head_size);
+                int vl1=0;
+                int vlm4_1= vsetvlmax_e32m4 ();
+                vfloat32m2_t v_a, v_b, v_mul, v_mul1;
+                vfloat32m2_t v_add=vfmv_v_f_f32m2 (0.0f, vlm4_1);
+                vfloat32m2_t v_sc=vfmv_v_f_f32m2 (scalar, vlm4_1);
+
+                int size=head_size;
+                
+                if (head_size>=vsetvl_e32m2(size))
+                {
+                    for (; size >vl1; size-=vl1){
+                    vl1 = vsetvl_e32m2(size);
+                    v_a = vle32_v_f32m2 (q_v, vl1);
+                    v_b = vle32_v_f32m2 (k_v, vl1);
+                    v_mul = vfmul_vv_f32m2 (v_a, v_b, vl1);
+                    v_mul1 = vfmul_vv_f32m2 (v_mul, v_sc, vl1);
+
+                    v_add = vfadd_vv_f32m2 (v_add, v_mul1, vl1);
+                    q_v+=vl1;   k_v+=vl1;
+                }
+
+                vl1=vsetvlmax_e32m1();
+                vfloat32m1_t v_res = vfmv_v_f_f32m1 (0.0f, vl1);
+                v_res=vfredosum_vs_f32m2_f32m1(v_res, v_add, v_res, vlm4_1);
+                vl1=vsetvl_e32m2(size);
+                v_sc=vfmv_v_f_f32m2 (scalar, vl1);
+                v_a = vle32_v_f32m2(q_v, vl1);
+                v_b = vle32_v_f32m2(k_v, vl1);
+                v_mul=vfmul_vv_f32m2 (v_a, v_b, vl1);
+                v_mul1 = vfmul_vv_f32m2 (v_mul, v_sc, vl1);
+
+                v_res=vfredosum_vs_f32m2_f32m1 (v_res, v_mul1, v_res, vl1);
+
+                vse32_v_f32m1 (att+t, v_res, 1);
+                }
+                else {
+                    float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
                 // calculate the attention score as the dot product of q and k
                 float score = 0.0f;
                 for (int i = 0; i < head_size; i++) {
@@ -345,6 +396,12 @@ float* forward(Transformer* transformer, int token, int pos) {
                 score /= sqrtf(head_size);
                 // save the score to the attention buffer
                 att[t] = score;
+                }
+                //score /= sqrtf(head_size);
+                //att[t] = score;
+
+
+                
             }
 
             // softmax the scores to get attention weights, from 0..pos inclusively
@@ -362,6 +419,47 @@ float* forward(Transformer* transformer, int token, int pos) {
                 for (int i = 0; i < head_size; i++) {
                     xb[i] += a * v[i];
                 }
+
+                // float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+                // float* v_v=v;
+                // float* v_xb=xb;
+                // float a = att[t];
+                // int vl1=0;
+                // int vlm4_1= vsetvlmax_e32m4 ();
+                // vfloat32m2_t v_ascr=vfmv_v_f_f32m2 (a, vlm4_1);
+
+                // vfloat32m2_t v_a, v_b, v_mul, v_mul1;
+                // vfloat32m2_t v_add=vfmv_v_f_f32m2 (0.0f, vlm4_1);
+
+                // int size=head_size;
+
+                // for (; size >vl1; size-=vl1){
+                //     vl1 = vsetvl_e32m2(size);
+                //     v_a = vle32_v_f32m2 (v_v, vl1);
+                //     v_b = vle32_v_f32m2 (v_xb, vl1);
+                //     v_mul = vfmul_vv_f32m2 (v_a, v_ascr, vl1);
+                //     v_b = vfadd_vv_f32m2 (v_b, v_mul, vl1);
+                //     vse32_v_f32m2 (xb+t+1, v_b, vl1);
+
+                //     v_v+=vl1;   v_xb+=vl1;
+                // }
+
+                // //vl1=vsetvlmax_e32m1();
+                // //vfloat32m1_t v_res = vfmv_v_f_f32m1 (0.0f, vl1);
+                // //v_res=vfredosum_vs_f32m2_f32m1(v_res, v_add, v_res, vlm4_1);
+                // vl1=vsetvl_e32m2(size);
+                // v_ascr=vfmv_v_f_f32m2 (a, vl1);
+                // v_a = vle32_v_f32m2 (v_v, vl1);
+                // v_b = vle32_v_f32m2 (v_xb, vl1);
+                // v_mul = vfmul_vv_f32m2 (v_a, v_ascr, vl1);
+                // v_b = vfadd_vv_f32m2 (v_b, v_mul, vl1);
+
+                // //v_res=vfredosum_vs_f32m2_f32m1 (v_res, v_mul1, v_res, vl1);
+
+                // vse32_v_f32m2 (xb+t+1, v_b, vl1);
+
+
+
             }
         }
         long end_mh = time_in_ms();
