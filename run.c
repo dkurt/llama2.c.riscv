@@ -13,8 +13,14 @@
     #include <unistd.h>
     #include <sys/mman.h>
 #endif
+#include <riscv_vector.h>
 // ----------------------------------------------------------------------------
 // Transformer model
+
+long time_m=0;
+int k_m=0;
+long time_in_ms();
+long time_m2=0;
 
 typedef struct {
     int dim; // transformer dimension
@@ -220,11 +226,37 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
     int i;
     #pragma omp parallel for private(i)
     for (i = 0; i < d; i++) {
-        float val = 0.0f;
-        for (int j = 0; j < n; j++) {
-            val += w[i * n + j] * x[j];
+        int vl = 0;
+        int vlm4 = vsetvlmax_e32m4();
+        vfloat32m4_t v_a, v_b, v_mul;
+        vfloat32m4_t v_add = vfmv_v_f_f32m4 (0.0f, vlm4);
+        int size=n;
+        float* x_v=x;
+        float* w_v=w;
+
+        for (; size >vl; size-=vl){
+            vl = vsetvl_e32m4(size);
+            v_a = vle32_v_f32m4 (x_v, vl);
+            v_b = vle32_v_f32m4 (w_v+i*n, vl);
+            v_mul = vfmul_vv_f32m4 (v_a, v_b, vl);
+            v_add = vfadd_vv_f32m4 (v_add, v_mul, vl);
+            x_v+=vl;   w_v+=vl;
         }
-        xout[i] = val;
+    vl=vsetvlmax_e32m1();
+    vfloat32m1_t v_res = vfmv_v_f_f32m1(0.0f, vl);
+    v_res = vfredosum_vs_f32m4_f32m1(v_res, v_add, v_res, vlm4);
+    vl=vsetvl_e32m4(size);
+    v_a = vle32_v_f32m4(x_v, vl);
+    v_b = vle32_v_f32m4(w_v+i*n, vl);
+    v_mul=vfmul_vv_f32m4 (v_a, v_b, vl);
+    v_res=vfredosum_vs_f32m4_f32m1 (v_res, v_mul, v_res, vl);
+
+    vse32_v_f32m1 (xout+i, v_res, 1);
+        // float val = 0.0f;
+        // for (int j = 0; j < n; j++) {
+        //     val += w[i * n + j] * x[j];
+        // }
+        // xout[i] = val;
     }
 }
 
@@ -245,6 +277,8 @@ float* forward(Transformer* transformer, int token, int pos) {
     float* content_row = w->token_embedding_table + token * dim;
     memcpy(x, content_row, dim*sizeof(*x));
 
+    long start_m1=0;
+    long end_m1=0;
     // forward all the layers
     for(unsigned long long l = 0; l < p->n_layers; l++) {
 
@@ -257,9 +291,20 @@ float* forward(Transformer* transformer, int token, int pos) {
         s->v = s->value_cache + loff + pos * kv_dim;
 
         // qkv matmuls for this position
+        start_m1 = time_in_ms();
         matmul(s->q, s->xb, w->wq + l*dim*dim, dim, dim);
+        end_m1 = time_in_ms();
+        time_m+=(end_m1-start_m1);
+
+        start_m1 = time_in_ms();
         matmul(s->k, s->xb, w->wk + l*dim*kv_dim, dim, kv_dim);
+        end_m1 = time_in_ms();
+        time_m+=(end_m1-start_m1);
+        
+        start_m1 = time_in_ms();          
         matmul(s->v, s->xb, w->wv + l*dim*kv_dim, dim, kv_dim);
+        end_m1 = time_in_ms();
+        time_m+=(end_m1-start_m1);
 
         // RoPE relative positional encoding: complex-valued rotate q and k in each head
         for (int i = 0; i < dim; i+=2) {
@@ -278,6 +323,8 @@ float* forward(Transformer* transformer, int token, int pos) {
             }
         }
 
+
+        long start_mh = time_in_ms();  
         // multihead attention. iterate over all heads
         int h;
         #pragma omp parallel for private(h)
@@ -288,8 +335,59 @@ float* forward(Transformer* transformer, int token, int pos) {
             float* att = s->att + h * p->seq_len;
             // iterate over all timesteps, including the current one
             for (int t = 0; t <= pos; t++) {
-                // get the key vector for this head and at this timestep
+                // // get the key vector for this head and at this timestep
+                // float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+                // // calculate the attention score as the dot product of q and k
+                // float score = 0.0f;
+                // for (int i = 0; i < head_size; i++) {
+                //     score += q[i] * k[i];
+                // }
+                // score /= sqrtf(head_size);
+                // // save the score to the attention buffer
+                // att[t] = score;
+
                 float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+                float score = 0.0f;
+                float* q_v=q; 
+                float*k_v=k;
+                float scalar=1/sqrtf(head_size);
+                int vl1=0;
+                int vlm4_1= vsetvlmax_e32m4 ();
+                vfloat32m2_t v_a, v_b, v_mul, v_mul1;
+                vfloat32m2_t v_add=vfmv_v_f_f32m2 (0.0f, vlm4_1);
+                vfloat32m2_t v_sc=vfmv_v_f_f32m2 (scalar, vlm4_1);
+
+                int size=head_size;
+                
+                if (head_size>=vsetvl_e32m2(size))
+                {
+                    for (; size >vl1; size-=vl1){
+                    vl1 = vsetvl_e32m2(size);
+                    v_a = vle32_v_f32m2 (q_v, vl1);
+                    v_b = vle32_v_f32m2 (k_v, vl1);
+                    v_mul = vfmul_vv_f32m2 (v_a, v_b, vl1);
+                    v_mul1 = vfmul_vv_f32m2 (v_mul, v_sc, vl1);
+
+                    v_add = vfadd_vv_f32m2 (v_add, v_mul1, vl1);
+                    q_v+=vl1;   k_v+=vl1;
+                }
+
+                vl1=vsetvlmax_e32m1();
+                vfloat32m1_t v_res = vfmv_v_f_f32m1 (0.0f, vl1);
+                v_res=vfredosum_vs_f32m2_f32m1(v_res, v_add, v_res, vlm4_1);
+                vl1=vsetvl_e32m2(size);
+                v_sc=vfmv_v_f_f32m2 (scalar, vl1);
+                v_a = vle32_v_f32m2(q_v, vl1);
+                v_b = vle32_v_f32m2(k_v, vl1);
+                v_mul=vfmul_vv_f32m2 (v_a, v_b, vl1);
+                v_mul1 = vfmul_vv_f32m2 (v_mul, v_sc, vl1);
+
+                v_res=vfredosum_vs_f32m2_f32m1 (v_res, v_mul1, v_res, vl1);
+
+                vse32_v_f32m1 (att+t, v_res, 1);
+                }
+                else {
+                    float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
                 // calculate the attention score as the dot product of q and k
                 float score = 0.0f;
                 for (int i = 0; i < head_size; i++) {
@@ -298,6 +396,12 @@ float* forward(Transformer* transformer, int token, int pos) {
                 score /= sqrtf(head_size);
                 // save the score to the attention buffer
                 att[t] = score;
+                }
+                //score /= sqrtf(head_size);
+                //att[t] = score;
+
+
+                
             }
 
             // softmax the scores to get attention weights, from 0..pos inclusively
@@ -315,11 +419,57 @@ float* forward(Transformer* transformer, int token, int pos) {
                 for (int i = 0; i < head_size; i++) {
                     xb[i] += a * v[i];
                 }
+
+                // float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
+                // float* v_v=v;
+                // float* v_xb=xb;
+                // float a = att[t];
+                // int vl1=0;
+                // int vlm4_1= vsetvlmax_e32m4 ();
+                // vfloat32m2_t v_ascr=vfmv_v_f_f32m2 (a, vlm4_1);
+
+                // vfloat32m2_t v_a, v_b, v_mul, v_mul1;
+                // vfloat32m2_t v_add=vfmv_v_f_f32m2 (0.0f, vlm4_1);
+
+                // int size=head_size;
+
+                // for (; size >vl1; size-=vl1){
+                //     vl1 = vsetvl_e32m2(size);
+                //     v_a = vle32_v_f32m2 (v_v, vl1);
+                //     v_b = vle32_v_f32m2 (v_xb, vl1);
+                //     v_mul = vfmul_vv_f32m2 (v_a, v_ascr, vl1);
+                //     v_b = vfadd_vv_f32m2 (v_b, v_mul, vl1);
+                //     vse32_v_f32m2 (xb+t+1, v_b, vl1);
+
+                //     v_v+=vl1;   v_xb+=vl1;
+                // }
+
+                // //vl1=vsetvlmax_e32m1();
+                // //vfloat32m1_t v_res = vfmv_v_f_f32m1 (0.0f, vl1);
+                // //v_res=vfredosum_vs_f32m2_f32m1(v_res, v_add, v_res, vlm4_1);
+                // vl1=vsetvl_e32m2(size);
+                // v_ascr=vfmv_v_f_f32m2 (a, vl1);
+                // v_a = vle32_v_f32m2 (v_v, vl1);
+                // v_b = vle32_v_f32m2 (v_xb, vl1);
+                // v_mul = vfmul_vv_f32m2 (v_a, v_ascr, vl1);
+                // v_b = vfadd_vv_f32m2 (v_b, v_mul, vl1);
+
+                // //v_res=vfredosum_vs_f32m2_f32m1 (v_res, v_mul1, v_res, vl1);
+
+                // vse32_v_f32m2 (xb+t+1, v_b, vl1);
+
+
+
             }
         }
+        long end_mh = time_in_ms();
+        time_m2+=(end_mh-start_mh);
 
+        start_m1 = time_in_ms();          
         // final matmul to get the output of the attention
         matmul(s->xb2, s->xb, w->wo + l*dim*dim, dim, dim);
+        end_m1 = time_in_ms();
+        time_m+=(end_m1-start_m1);
 
         // residual connection back into x
         for (int i = 0; i < dim; i++) {
@@ -331,8 +481,15 @@ float* forward(Transformer* transformer, int token, int pos) {
 
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
+        start_m1 = time_in_ms();         
         matmul(s->hb, s->xb, w->w1 + l*dim*hidden_dim, dim, hidden_dim);
+        end_m1 = time_in_ms();
+        time_m+=(end_m1-start_m1);
+
+        start_m1 = time_in_ms();         
         matmul(s->hb2, s->xb, w->w3 + l*dim*hidden_dim, dim, hidden_dim);
+        end_m1 = time_in_ms();
+        time_m+=(end_m1-start_m1);
 
         // SwiGLU non-linearity
         for (int i = 0; i < hidden_dim; i++) {
@@ -345,22 +502,30 @@ float* forward(Transformer* transformer, int token, int pos) {
         }
 
         // final matmul to get the output of the ffn
+        start_m1 = time_in_ms();         
         matmul(s->xb, s->hb, w->w2 + l*dim*hidden_dim, hidden_dim, dim);
-
+        end_m1 = time_in_ms();
+        time_m+=(end_m1-start_m1);
+        
         // residual connection
         for (int i = 0; i < dim; i++) {
             x[i] += s->xb[i];
         }
+        k_m+=7;
     }
 
     // final rmsnorm
     rmsnorm(x, x, w->rms_final_weight, dim);
 
     // classifier into logits
+    start_m1 = time_in_ms();         
     matmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
+    end_m1 = time_in_ms();
+    time_m+=(end_m1-start_m1);
+    k_m+=1;    
+
     return s->logits;
 }
-
 // ----------------------------------------------------------------------------
 // The Byte Pair Encoding (BPE) Tokenizer that translates strings <-> tokens
 
@@ -727,9 +892,12 @@ long time_in_ms() {
 // generation loop
 
 void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
+    long *m= (long*)malloc(steps*sizeof(long));
+
     char *empty_prompt = "";
     if (prompt == NULL) { prompt = empty_prompt; }
 
+    long start2 = time_in_ms();
     // encode the (string) prompt into tokens sequence
     int num_prompt_tokens = 0;
     int* prompt_tokens = (int*)malloc((strlen(prompt)+3) * sizeof(int)); // +3 for '\0', ?BOS, ?EOS
@@ -738,7 +906,10 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
         fprintf(stderr, "something is wrong, expected at least 1 prompt token\n");
         exit(EXIT_FAILURE);
     }
+    long end2 = time_in_ms();
+    fprintf(stderr, "in generate: encode ms: %f\n", (double)(end2-start2));
 
+    long start3 = time_in_ms();
     // start the main loop
     long start = 0;  // used to time our code, only initialized after first iteration
     int next;        // will store the next token in the sequence
@@ -747,8 +918,11 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
     while (pos < steps) {
 
         // forward the transformer to get logits for the next token
+        long start_m=time_in_ms();
         float* logits = forward(transformer, token, pos);
-
+        long end_m = time_in_ms();
+        m[pos]=(end_m-start_m);
+    
         // advance the state machine
         if (pos < num_prompt_tokens - 1) {
             // if we are still processing the input prompt, force the next prompt token
@@ -771,13 +945,28 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
         // init the timer here because the first iteration can be slower
         if (start == 0) { start = time_in_ms(); }
     }
+    
+     long sum_el=0;
+    for (size_t i=0; i<steps; i++) sum_el+=m[i];
+    fprintf(stderr, "in generate: forward ms: %f\n", (double)(sum_el/steps));
+
+    fprintf(stderr, "matmul ms: %f\n", (double)(time_m)/(double)(k_m));
+    //fprintf(stderr, "matmul/forward %f %\n", (double)(time_m)/(double)(sum_el)*100);
+
+    fprintf (stderr, "multihead ms: %f\n", (double)(time_m2));
+
     printf("\n");
+    long end3 = time_in_ms();
+    fprintf(stderr, "in generate: main loop ms: %f\n", (double)(end3-start3));
 
     // report achieved tok/s (pos-1 because the timer starts after first iteration)
     if (pos > 1) {
         long end = time_in_ms();
         fprintf(stderr, "achieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
+        fprintf(stderr, "generate ms: %f\n", (double)(end-start));
     }
+
+   
 
     free(prompt_tokens);
 }
@@ -810,6 +999,7 @@ void chat(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler,
     int num_prompt_tokens = 0;
     int* prompt_tokens = (int*)malloc(1152 * sizeof(int));
     int user_idx;
+    
 
     // start the main loop
     int8_t user_turn = 1; // user starts
@@ -941,6 +1131,7 @@ int main(int argc, char *argv[]) {
     if (topp < 0.0 || 1.0 < topp) topp = 0.9;
     if (steps < 0) steps = 0;
 
+    
     // build the Transformer via the model .bin file
     Transformer transformer;
     build_transformer(&transformer, checkpoint_path);

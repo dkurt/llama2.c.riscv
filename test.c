@@ -93,6 +93,7 @@ int test_rvv()
 
 
 void test_generate(char* prompt, char* checkpoint_path, float temperature, int steps, float topp, const char* expected){
+    long start_g = time_in_ms();
     char *tokenizer_path = "tokenizer.bin";
     unsigned long long rng_seed = 124; // seed rng with time by default
 
@@ -120,11 +121,16 @@ void test_generate(char* prompt, char* checkpoint_path, float temperature, int s
     generate(&transformer, &tokenizer, &sampler, prompt, steps);
     freopen("/dev/tty", "w", stdout);  // resume
 
+        
+    long start4 = time_in_ms();
     // memory and file handles cleanup
     free_sampler(&sampler);
     free_tokenizer(&tokenizer);
     free_transformer(&transformer);
+    long end4 = time_in_ms();
+    fprintf(stderr, "memory and file handles cleanup ms: %f\n", (double)(end4-start4));
 
+    long start5 = time_in_ms();
     // Check
     FILE* f = fopen("output.txt", "rt");
     fseek(f, 0, SEEK_END);
@@ -134,12 +140,17 @@ void test_generate(char* prompt, char* checkpoint_path, float temperature, int s
     fread(output, sizeof(char), sz, f);
     output[sz - 1] = '\0';
     fclose(f);
+    long end5 = time_in_ms();
+    fprintf(stderr, "check ms: %f\n", (double)(end5-start5));
 
     int res = strcmp(expected, output);
     if (res != 0) {
         printf("Expected: %s\n\nGenerated: %s\n", expected, output);
     }
     assert_eq(res, 0);
+
+    long end_g = time_in_ms();
+    fprintf(stderr, "time ms: %f\n\n", (double)(end_g-start_g));
 }
 
 int main(int argc, char *argv[]) {
