@@ -5,8 +5,8 @@ CC = riscv64-unknown-linux-gnu-gcc
 # the most basic way of building that is most likely to work on most systems
 .PHONY: run
 run: run.c
-	$(CC) -O3 -march=rv64gcv0p7 -mabi=lp64d -o run run.c -lm
-	$(CC) -O3 -march=rv64gcv0p7 -mabi=lp64d -o runq runq.c -lm
+	$(CC) -O3 -march=rv64gcv0p7 -fopenmp -mabi=lp64d -o run run.c -lm
+	$(CC) -O3 -march=rv64gcv0p7 -fopenmp -mabi=lp64d -o runq runq.c -lm
 
 # useful for a debug build, can then e.g. analyze with valgrind, example:
 # $ valgrind --leak-check=full ./run out/model.bin -n 3
