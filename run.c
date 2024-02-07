@@ -13,6 +13,7 @@
     #include <unistd.h>
     #include <sys/mman.h>
 #endif
+#include <riscv_vector.h>
 // ----------------------------------------------------------------------------
 // Transformer model
 
@@ -214,6 +215,7 @@ void softmax(float* x, int size) {
     }
 }
 
+/*
 void matmul(float* xout, float* x, float* w, int n, int d) {
     // W (d,n) @ x (n,) -> xout (d,)
     // by far the most amount of time is spent inside this little function
@@ -225,6 +227,44 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
             val += w[i * n + j] * x[j];
         }
         xout[i] = val;
+    }
+}
+*/
+
+void matmul(float* xout, float* x, float* w, int n, int d) {
+    // W (d,n) @ x (n,) -> xout (d,)
+    // by far the most amount of time is spent inside this little function
+    int i;
+    #pragma omp parallel for private(i)
+    for (i = 0; i < d; i++) {
+        float* x_ptr = x;
+        float* w_ptr = w;
+        int vl = vsetvlmax_e32m4();
+        vfloat32m4_t x_v, w_v, mul_v;
+        vfloat32m4_t sum_v = vfmv_v_f_f32m4(0.0f, vl);
+
+        int size = n;
+        for (; size > vl; size -= vl) {
+            vl = vsetvl_e32m4(size);
+            x_v = vle32_v_f32m4(x_ptr, vl);
+            w_v = vle32_v_f32m4(w_ptr + i * n, vl);
+            mul_v = vfmul_vv_f32m4(w_v, x_v, vl);
+            sum_v = vfadd_vv_f32m4(sum_v, mul_v, vl);
+
+            x_ptr += vl;
+            w_ptr += vl;
+        }
+
+        vfloat32m1_t val_v = vfmv_v_f_f32m1(0.0f, vsetvlmax_e32m1());
+        val_v = vfredosum_vs_f32m4_f32m1(val_v, sum_v, val_v, vsetvlmax_e32m4());
+
+        vl = vsetvl_e32m4(size);
+        x_v = vle32_v_f32m4(x_ptr, vl);
+        w_v = vle32_v_f32m4(w_ptr + i * n, vl);
+        mul_v = vfmul_vv_f32m4(w_v, x_v, vl);
+        val_v = vfredosum_vs_f32m4_f32m1(val_v, mul_v, val_v, vl);
+
+        vse32_v_f32m1(xout + i, val_v, 1);
     }
 }
 
