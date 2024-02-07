@@ -1,0 +1,27 @@
+BASE VERSION
+sipeed@lpi4a:~/2024riscv3/Pikin$ sudo perf record -e cycles,instructions -a -g -- ./testc_base_version
+achieved tok/s: 31.619291
+achieved tok/s: 4.734497
+achieved tok/s: 4.642049
+achieved tok/s: 4.768786
+achieved tok/s: 4.605522
+matmul() total time: 126.016564
+
+OMP VERSION
+achieved tok/s: 51.589369
+achieved tok/s: 8.162612
+achieved tok/s: 7.948872
+achieved tok/s: 8.184524
+achieved tok/s: 7.936824
+matmul() total time: 72.541316
+
+VECTORIZATION
+
+achieved tok/s: 48.175182
+achieved tok/s: 8.036558
+achieved tok/s: 7.691118
+achieved tok/s: 7.956281
+achieved tok/s: 7.668889
+matmul() total time: 72.806875
+
+

@@ -13,6 +13,10 @@
     #include <unistd.h>
     #include <sys/mman.h>
 #endif
+#include <riscv_vector.h>
+#include <omp.h>
+extern double matmul_time;
+
 // ----------------------------------------------------------------------------
 // Transformer model
 
@@ -214,19 +218,67 @@ void softmax(float* x, int size) {
     }
 }
 
+// void matmul(float* xout, float* x, float* w, int n, int d) {
+//     double start = omp_get_wtime();
+//     // W (d,n) @ x (n,) -> xout (d,)
+//     // by far the most amount of time is spent inside this little function
+//     int i;
+//     //#pragma omp parallel for private(i)
+//     for (i = 0; i < d; i++) {
+//         float val = 0.0f;
+//         for (int j = 0; j < n; j++) {
+//             val += w[i * n + j] * x[j];
+//         }
+//         xout[i] = val;
+//     }
+//     double end = omp_get_wtime();
+//     matmul_time += end - start;
+// }
+
 void matmul(float* xout, float* x, float* w, int n, int d) {
+    double start = omp_get_wtime();
     // W (d,n) @ x (n,) -> xout (d,)
     // by far the most amount of time is spent inside this little function
     int i;
-    #pragma omp parallel for private(i)
+
+    //#pragma omp parallel for private(i)
     for (i = 0; i < d; i++) {
-        float val = 0.0f;
-        for (int j = 0; j < n; j++) {
-            val += w[i * n + j] * x[j];
+        float* x1 = x;
+        float* w1 = &w[i*n];
+        
+        int size_n = n;
+        size_t vlm4 = vsetvlmax_e32m4();
+        vfloat32m4_t v_x, v_w, v_mul;
+        vfloat32m4_t v_add = vfmv_v_f_f32m4(0.0, vlm4);
+
+        int vl = vsetvlmax_e32m4();
+        for(; size_n > vl; size_n -= vl) {
+            vl = vsetvl_e32m4(size_n);
+            v_w = vle32_v_f32m4(w1, vl);
+            v_x = vle32_v_f32m4(x1, vl);
+            // vmul = vfmul_vv_f32m4(v_w, v_x, vl);
+            // v_add = vfadd_vv_f32m4(v_add, v_mul, vl);
+            v_add = vfmacc_vv_f32m4(v_add, v_w, v_x, vl);
+
+            x1 += vl;
+            w1 += vl;
         }
-        xout[i] = val;
+        vl = vsetvlmax_e32m1();
+        vfloat32m1_t v_res = vfmv_v_f_f32m1(0.0, vl);
+        v_res = vfredosum_vs_f32m4_f32m1(v_res, v_add, v_res, vlm4);
+        vl = vsetvl_e32m4(size_n);
+        v_w = vle32_v_f32m4(w1, vl);
+        v_x = vle32_v_f32m4(x1, vl);
+        v_mul = vfmul_vv_f32m4(v_w, v_x, vl);
+        v_res = vfredosum_vs_f32m4_f32m1(v_res, v_mul, v_res, vl);
+
+        vse32_v_f32m1(&xout[i], v_res, 1);
     }
+    double end = omp_get_wtime();
+    matmul_time += end - start;
 }
+
+
 
 float* forward(Transformer* transformer, int token, int pos) {
 
@@ -280,7 +332,7 @@ float* forward(Transformer* transformer, int token, int pos) {
 
         // multihead attention. iterate over all heads
         int h;
-        #pragma omp parallel for private(h)
+        //#pragma omp parallel for private(h)
         for (h = 0; h < p->n_heads; h++) {
             // get the query vector for this head
             float* q = s->q + h * head_size;
