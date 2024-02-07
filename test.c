@@ -41,7 +41,6 @@ void test_prompt_encoding(Tokenizer* tokenizer, char* prompt, int* expected_toke
 
 void test_prompt_encodings() {
     // let's verify that the Tokenizer works as expected
-
     char *tokenizer_path = "tokenizer.bin";
     int vocab_size = 32000;
     Tokenizer tokenizer;
@@ -93,6 +92,9 @@ int test_rvv()
 
 
 void test_generate(char* prompt, char* checkpoint_path, float temperature, int steps, float topp, const char* expected){
+    long st_time = 0;
+    long en_time = 0;
+    st_time = time_in_ms();
     char *tokenizer_path = "tokenizer.bin";
     unsigned long long rng_seed = 124; // seed rng with time by default
 
@@ -140,6 +142,8 @@ void test_generate(char* prompt, char* checkpoint_path, float temperature, int s
         printf("Expected: %s\n\nGenerated: %s\n", expected, output);
     }
     assert_eq(res, 0);
+    en_time = time_in_ms();
+    fprintf(stderr, "run_all_prog mc: %f\n", (double)en_time - (double)st_time);
 }
 
 int main(int argc, char *argv[]) {

@@ -7,6 +7,7 @@
 #include <math.h>
 #include <string.h>
 #include <fcntl.h>
+#include <riscv_vector.h>
 #if defined _WIN32
     #include "win.h"
 #else
@@ -15,6 +16,14 @@
 #endif
 // ----------------------------------------------------------------------------
 // Transformer model
+long time_in_ms();
+long total_sum = 0;
+long total_time = 0;
+long start_time = 0;
+long end_time = 0;
+long start_time_f = 0;
+long end_time_f = 0;
+long count_mul = 0;
 
 typedef struct {
     int dim; // transformer dimension
@@ -216,20 +225,62 @@ void softmax(float* x, int size) {
 
 void matmul(float* xout, float* x, float* w, int n, int d) {
     // W (d,n) @ x (n,) -> xout (d,)
-    // by far the most amount of time is spent inside this little function
-    int i;
-    #pragma omp parallel for private(i)
-    for (i = 0; i < d; i++) {
-        float val = 0.0f;
-        for (int j = 0; j < n; j++) {
-            val += w[i * n + j] * x[j];
+    // by far the most amount of time is spent inside this little function   
+    for (int i = 0; i < d; ++i) {
+        int vl = 0;
+        int vlm4 = vsetvlmax_e32m4();
+
+        vfloat32m4_t vec_x, vec_w, v_mul;
+        vfloat32m4_t v_add = vfmv_v_f_f32m4(0.0f, vlm4);
+
+        int v_n = n;
+        float* v_wpoint = w + i * n;
+        float* v_xpoint = x;
+
+        for (; v_n > vl; v_n -= vl) {
+            vl = vsetvl_e32m4(v_n);
+            vec_x = vle32_v_f32m4(v_xpoint, vl);
+            vec_w = vle32_v_f32m4(v_wpoint, vl);
+
+            v_mul = vfmul_vv_f32m4(vec_x, vec_w, vl);
+            v_add = vfadd_vv_f32m4(v_add, v_mul, vl);
+
+            v_wpoint += vl;
+            v_xpoint += vl;
+
         }
-        xout[i] = val;
+
+        vl = vsetvlmax_e32m1();
+        vfloat32m1_t v_res = vfmv_v_f_f32m1(0.0f, vl);
+        v_res = vfredosum_vs_f32m4_f32m1(v_res, v_add, v_res, vlm4);
+        vl = vsetvl_e32m4(v_n);
+
+        vec_x = vle32_v_f32m4(v_xpoint, vl);
+        vec_w = vle32_v_f32m4(v_wpoint, vl);
+        v_mul = vfmul_vv_f32m4(vec_x, vec_w, vl);
+        v_res = vfredosum_vs_f32m4_f32m1(v_res, v_mul, v_res, vl);
+
+        vse32_v_f32m1(xout + i, v_res, 1);
     }
+
 }
 
-float* forward(Transformer* transformer, int token, int pos) {
+// void matmul(float* xout, float* x, float* w, int n, int d) {
+//     // W (d,n) @ x (n,) -> xout (d,)
+//     // by far the most amount of time is spent inside this little function
+//     int i;
+//     #pragma omp parallel for private(i)
+//     for (i = 0; i < d; i++) {
+//         float val = 0.0f;
+//         for (int j = 0; j < n; j++) {
+//             val += w[i * n + j] * x[j];
+//         }
+//         xout[i] = val;
+//     }
+// }
 
+float* forward(Transformer* transformer, int token, int pos) {
+    start_time_f = time_in_ms();
     // a few convenience variables
     Config* p = &transformer->config;
     TransformerWeights* w = &transformer->weights;
@@ -257,9 +308,20 @@ float* forward(Transformer* transformer, int token, int pos) {
         s->v = s->value_cache + loff + pos * kv_dim;
 
         // qkv matmuls for this position
+        start_time = time_in_ms();
         matmul(s->q, s->xb, w->wq + l*dim*dim, dim, dim);
+        end_time = time_in_ms();
+        total_sum += end_time - start_time;
+
+        start_time = time_in_ms();
         matmul(s->k, s->xb, w->wk + l*dim*kv_dim, dim, kv_dim);
+        end_time = time_in_ms();
+        total_sum += end_time - start_time;
+
+        start_time = time_in_ms();
         matmul(s->v, s->xb, w->wv + l*dim*kv_dim, dim, kv_dim);
+        end_time = time_in_ms();
+        total_sum += end_time - start_time;
 
         // RoPE relative positional encoding: complex-valued rotate q and k in each head
         for (int i = 0; i < dim; i+=2) {
@@ -319,7 +381,10 @@ float* forward(Transformer* transformer, int token, int pos) {
         }
 
         // final matmul to get the output of the attention
+        start_time = time_in_ms();
         matmul(s->xb2, s->xb, w->wo + l*dim*dim, dim, dim);
+        end_time = time_in_ms();
+        total_sum += end_time - start_time;
 
         // residual connection back into x
         for (int i = 0; i < dim; i++) {
@@ -331,8 +396,15 @@ float* forward(Transformer* transformer, int token, int pos) {
 
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
+        start_time = time_in_ms();
         matmul(s->hb, s->xb, w->w1 + l*dim*hidden_dim, dim, hidden_dim);
+        end_time = time_in_ms();
+        total_sum += end_time - start_time;
+
+        start_time = time_in_ms();
         matmul(s->hb2, s->xb, w->w3 + l*dim*hidden_dim, dim, hidden_dim);
+        end_time = time_in_ms();
+        total_sum += end_time - start_time;
 
         // SwiGLU non-linearity
         for (int i = 0; i < hidden_dim; i++) {
@@ -345,7 +417,10 @@ float* forward(Transformer* transformer, int token, int pos) {
         }
 
         // final matmul to get the output of the ffn
+        start_time = time_in_ms();
         matmul(s->xb, s->hb, w->w2 + l*dim*hidden_dim, hidden_dim, dim);
+        end_time = time_in_ms();
+        total_sum += end_time - start_time;
 
         // residual connection
         for (int i = 0; i < dim; i++) {
@@ -357,7 +432,15 @@ float* forward(Transformer* transformer, int token, int pos) {
     rmsnorm(x, x, w->rms_final_weight, dim);
 
     // classifier into logits
+    start_time = time_in_ms();
     matmul(s->logits, x, w->wcls, p->dim, p->vocab_size);
+    end_time = time_in_ms();
+    total_sum += end_time - start_time;
+
+    count_mul += p->n_heads * 7 + 1;
+
+    end_time_f = time_in_ms();
+    total_time = end_time_f - start_time_f;
     return s->logits;
 }
 
@@ -777,6 +860,11 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
     if (pos > 1) {
         long end = time_in_ms();
         fprintf(stderr, "achieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
+
+        fprintf(stderr, "matrix_mul_not_op mc: %f\n", 2.410529);
+        fprintf(stderr, "matrix_mul_opt mc: %f\n", (double)total_sum / (double)count_mul);
+        fprintf(stderr, "performance gains (percent): %f\n", (double)total_sum / (double)count_mul / 2.410529);
+        fprintf(stderr, "run_forward mc: %f\n", (double)total_time);
     }
 
     free(prompt_tokens);
