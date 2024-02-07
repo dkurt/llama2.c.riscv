@@ -1,0 +1,40 @@
+BASE VERSION
+achieved tok/s: 31.619291
+achieved tok/s: 4.734497
+achieved tok/s: 4.642049
+achieved tok/s: 4.768786
+achieved tok/s: 4.605522
+matmul() total time: 126.016564
+
+OMP VERSION 4 threads
+achieved tok/s: 51.589369
+achieved tok/s: 8.162612
+achieved tok/s: 7.948872
+achieved tok/s: 8.184524
+achieved tok/s: 7.936824
+matmul() total time: 72.541316
+
+VECTORIZATION
+achieved tok/s: 48.175182
+achieved tok/s: 8.036558
+achieved tok/s: 7.691118
+achieved tok/s: 7.956281
+achieved tok/s: 7.668889
+matmul() total time: 72.806875
+
+VEC+OMP 4 threads
+achieved tok/s: 54.425509
+achieved tok/s: 8.410290
+achieved tok/s: 7.958408
+achieved tok/s: 8.203513
+achieved tok/s: 8.071385
+matmul() total time: 71.398188
+
+VEC+OMP 2 threads
+achieved tok/s: 56.701031
+achieved tok/s: 8.759876
+achieved tok/s: 8.381771
+achieved tok/s: 8.677360
+achieved tok/s: 8.334031
+matmul() total time: 66.965953
+

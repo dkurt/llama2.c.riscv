@@ -2,6 +2,10 @@
 #include "run.c"
 
 #include <riscv_vector.h>
+#include <omp.h>
+
+double matmul_time = 0;
+
 
 void assert_eq(int a, int b) {
     if (a != b) {
@@ -183,4 +187,6 @@ The thunder was so strong that it made a big storm. It was so bad";
 
     printf("ALL OK\n");
 
+    printf("matmul() total time: %lf\n", matmul_time);
+    
 }
